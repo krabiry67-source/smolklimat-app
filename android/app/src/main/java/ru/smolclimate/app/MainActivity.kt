@@ -28,6 +28,9 @@ import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
+    private lateinit var root: android.widget.FrameLayout
+    private var site: WebView? = null
+    private var siteUrl = ""
     private var fileCallback: ValueCallback<Array<Uri>>? = null
 
     private val photoPerm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -35,6 +38,14 @@ class MainActivity : AppCompatActivity() {
     // Разрешения: результат возвращаем в страницу -> window.onSmolPermission(kind, granted)
     private val askPhotos = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> reply("photos", ok) }
     private val askNotif = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> reply("notif", ok) }
+
+    // Каталог сайта: «Заказать монтаж» возвращает сюда и открывает заявку.
+    private val openSite = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            val page = (res.data?.getStringExtra("page") ?: "").replace("\\", "").replace("'", "’")
+            web.post { web.evaluateJavascript("window.onSmolOrder && window.onSmolOrder('$page')", null) }
+        }
+    }
 
     // Выбор фото: только изображения, до 3 штук. Размер (≤ 5 МБ) и тип проверяет страница и сервер.
     private val pickImages = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
@@ -57,7 +68,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         web = WebView(this)
-        setContentView(web)
+        root = android.widget.FrameLayout(this)
+        root.addView(web, android.widget.FrameLayout.LayoutParams(-1, -1))
+        setContentView(root)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = true
@@ -93,13 +106,58 @@ class MainActivity : AppCompatActivity() {
     }
 
     @Deprecated("Deprecated in Java")
-    override fun onBackPressed() { if (web.canGoBack()) web.goBack() else super.onBackPressed() }
+    override fun onBackPressed() {
+        val s = site
+        if (s != null && s.visibility == android.view.View.VISIBLE && s.canGoBack()) { s.goBack(); return }
+        if (web.canGoBack()) web.goBack() else super.onBackPressed()
+    }
+
+    // Каталог внутри вкладки «Кондиционеры»: второй WebView поверх области контента (координаты — в CSS-пикселях страницы).
+    // Открывает только каталог и карточки товаров; остальные ссылки — во внешних приложениях.
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showSite(url: String, x: Double, y: Double, w: Double, h: Double) {
+        val d = resources.displayMetrics.density
+        val s = site ?: WebView(this).also { v ->
+            v.settings.javaScriptEnabled = true
+            v.settings.domStorageEnabled = true
+            v.setBackgroundColor(android.graphics.Color.WHITE)
+            v.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
+                    val u = req.url
+                    val ok = (u.scheme == "https" || u.scheme == "http") && (u.host ?: "").endsWith("smolclimate.ru") &&
+                        (u.path ?: "").let { it.startsWith("/katalog") || it.startsWith("/tproduct") }
+                    if (ok) return false
+                    try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (e: Exception) {}
+                    return true
+                }
+            }
+            root.addView(v)
+            site = v
+        }
+        s.layoutParams = android.widget.FrameLayout.LayoutParams((w * d).toInt(), (h * d).toInt()).apply {
+            leftMargin = (x * d).toInt(); topMargin = (y * d).toInt()
+        }
+        s.visibility = android.view.View.VISIBLE
+        if (siteUrl != url) { siteUrl = url; s.loadUrl(url) }
+    }
 
     inner class Bridge {
         @JavascriptInterface
         fun installApk(url: String) = runOnUiThread { downloadAndInstall(url) }
         @JavascriptInterface
         fun version(): String = packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.0"
+        @JavascriptInterface
+        fun openBrowser(url: String) = runOnUiThread {
+            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
+        }
+        @JavascriptInterface
+        fun showSite(url: String, x: Double, y: Double, w: Double, h: Double) = runOnUiThread { showSite(url, x, y, w, h) }
+        @JavascriptInterface
+        fun hideSite() = runOnUiThread { site?.visibility = android.view.View.GONE }
+        @JavascriptInterface
+        fun reloadSite() = runOnUiThread { site?.reload() }
+        @JavascriptInterface
+        fun openSite(url: String) = runOnUiThread { openSite.launch(SiteActivity.intent(this@MainActivity, url)) }
         @JavascriptInterface
         fun hasPhotos(): Boolean = granted(photoPerm)
         @JavascriptInterface
