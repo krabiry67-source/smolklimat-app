@@ -70,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         web = WebView(this)
         root = android.widget.FrameLayout(this)
         root.addView(web, android.widget.FrameLayout.LayoutParams(-1, -1))
+        root.addView(buildSplash(), android.widget.FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
@@ -86,9 +87,12 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onPageFinished(view: WebView, url: String) {
                 view.evaluateJavascript("document.documentElement.classList.add('app')", null)
+                splashBar?.progress = 100
+                ui.postDelayed({ hideSplash() }, 350)
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, p: Int) { splashBar?.let { if (p > it.progress) it.progress = p } }
             override fun onShowFileChooser(view: WebView, cb: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 fileCallback?.onReceiveValue(null)
                 fileCallback = cb
@@ -103,6 +107,43 @@ class MainActivity : AppCompatActivity() {
             }
         }
         web.loadUrl("file:///android_asset/index.html")
+    }
+
+    // ===== Загрузочный экран: логотип по центру на белом фоне + полоска загрузки =====
+    private var splash: android.view.View? = null
+    private var splashBar: android.widget.ProgressBar? = null
+
+    private fun buildSplash(): android.view.View {
+        val d = resources.displayMetrics.density
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setBackgroundColor(android.graphics.Color.WHITE)
+            isClickable = true
+        }
+        val logo = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.splash_logo)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
+        }
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; progress = 5; isIndeterminate = false
+            progressTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#3486D6"))
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#E3EEFA"))
+        }
+        box.addView(logo, android.widget.LinearLayout.LayoutParams((180 * d).toInt(), (180 * d).toInt()))
+        box.addView(bar, android.widget.LinearLayout.LayoutParams((180 * d).toInt(), (6 * d).toInt()).apply { topMargin = (36 * d).toInt() })
+        // плавно «дотягиваем» полоску, пока страница грузится
+        val tick = object : Runnable { override fun run() { val b = splashBar ?: return; if (b.progress < 90) { b.progress += 2; ui.postDelayed(this, 120) } } }
+        ui.postDelayed(tick, 200)
+        splash = box; splashBar = bar
+        return box
+    }
+
+    private fun hideSplash() {
+        val v = splash ?: return
+        splash = null; splashBar = null
+        v.animate().alpha(0f).setDuration(250).withEndAction { root.removeView(v) }.start()
     }
 
     @Deprecated("Deprecated in Java")
@@ -234,7 +275,7 @@ class MainActivity : AppCompatActivity() {
         val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         dlId = try {
             dm.enqueue(DownloadManager.Request(Uri.parse(url))
-                .setTitle("Обновление СмолКлимат " + pendingVersion)
+                .setTitle("Обновление «СмолКлимат — вызов мастера» " + pendingVersion)
                 .setMimeType("application/vnd.android.package-archive")
                 .setDestinationUri(Uri.fromFile(file))
                 .setAllowedOverMetered(true).setAllowedOverRoaming(true)

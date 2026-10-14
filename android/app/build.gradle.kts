@@ -3,6 +3,18 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Версия = тег релиза. Порядок: VERSION_NAME из сборки GitHub → последний git-тег (v1.0.5) → 1.0.0.
+// versionCode считается из номера: 1.0.5 → 10005, поэтому каждый следующий релиз всегда «новее».
+fun gitTag(): String? = try {
+    val p = ProcessBuilder("git", "describe", "--tags", "--abbrev=0").directory(rootDir).redirectErrorStream(true).start()
+    val out = p.inputStream.bufferedReader().readText().trim()
+    if (p.waitFor() == 0 && Regex("^v?\\d+(\\.\\d+){0,2}$").matches(out)) out else null
+} catch (e: Exception) { null }
+
+val appVersionName: String = (System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: gitTag() ?: "1.0.0").removePrefix("v")
+val appVersionCode: Int = System.getenv("VERSION_CODE")?.toIntOrNull()
+    ?: appVersionName.split(".").map { it.toIntOrNull() ?: 0 }.let { (it.getOrElse(0) { 1 }) * 10000 + (it.getOrElse(1) { 0 }) * 100 + (it.getOrElse(2) { 0 }) }
+
 android {
     namespace = "ru.smolclimate.app"
     compileSdk = 34
@@ -10,8 +22,8 @@ android {
         applicationId = "ru.smolclimate.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = (System.getenv("VERSION_CODE") ?: "2").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "1.0.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
     signingConfigs {
         create("release") {
