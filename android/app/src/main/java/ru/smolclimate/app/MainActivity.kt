@@ -40,7 +40,7 @@ class MainActivity : AppCompatActivity() {
     private val askNotif = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> reply("notif", ok) }
 
     // Каталог сайта: «Заказать монтаж» возвращает сюда и открывает заявку.
-    private val openSite = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+    private val siteLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
             val page = (res.data?.getStringExtra("page") ?: "").replace("\\", "").replace("'", "’")
             web.post { web.evaluateJavascript("window.onSmolOrder && window.onSmolOrder('$page')", null) }
@@ -115,7 +115,7 @@ class MainActivity : AppCompatActivity() {
     // Каталог внутри вкладки «Кондиционеры»: второй WebView поверх области контента (координаты — в CSS-пикселях страницы).
     // Открывает только каталог и карточки товаров; остальные ссылки — во внешних приложениях.
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showSite(url: String, x: Double, y: Double, w: Double, h: Double) {
+    private fun showSiteView(url: String, x: Double, y: Double, w: Double, h: Double) {
         val d = resources.displayMetrics.density
         val s = site ?: WebView(this).also { v ->
             v.settings.javaScriptEnabled = true
@@ -143,27 +143,27 @@ class MainActivity : AppCompatActivity() {
 
     inner class Bridge {
         @JavascriptInterface
-        fun installApk(url: String) = runOnUiThread { downloadAndInstall(url) }
+        fun installApk(url: String): Unit = runOnUiThread { downloadAndInstall(url) }
         @JavascriptInterface
         fun version(): String = packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.0"
         @JavascriptInterface
-        fun openBrowser(url: String) = runOnUiThread {
+        fun openBrowser(url: String): Unit = runOnUiThread {
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
         }
         @JavascriptInterface
-        fun showSite(url: String, x: Double, y: Double, w: Double, h: Double) = runOnUiThread { showSite(url, x, y, w, h) }
+        fun showSite(url: String, x: Double, y: Double, w: Double, h: Double): Unit = runOnUiThread { showSiteView(url, x, y, w, h) }
         @JavascriptInterface
-        fun hideSite() = runOnUiThread { site?.visibility = android.view.View.GONE }
+        fun hideSite(): Unit = runOnUiThread { site?.visibility = android.view.View.GONE }
         @JavascriptInterface
-        fun reloadSite() = runOnUiThread { site?.reload() }
+        fun reloadSite(): Unit = runOnUiThread { site?.reload() }
         @JavascriptInterface
-        fun openSite(url: String) = runOnUiThread { openSite.launch(SiteActivity.intent(this@MainActivity, url)) }
+        fun openSite(url: String): Unit = runOnUiThread { siteLauncher.launch(SiteActivity.intent(this@MainActivity, url)) }
         @JavascriptInterface
         fun hasPhotos(): Boolean = granted(photoPerm)
         @JavascriptInterface
-        fun requestPhotos() = runOnUiThread { if (granted(photoPerm)) reply("photos", true) else askPhotos.launch(photoPerm) }
+        fun requestPhotos(): Unit = runOnUiThread { if (granted(photoPerm)) reply("photos", true) else askPhotos.launch(photoPerm) }
         @JavascriptInterface
-        fun requestNotifications() = runOnUiThread {
+        fun requestNotifications(): Unit = runOnUiThread {
             if (Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)) reply("notif", true)
             else askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
