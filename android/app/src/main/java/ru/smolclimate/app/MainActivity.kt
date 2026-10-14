@@ -143,21 +143,23 @@ class MainActivity : AppCompatActivity() {
 
     inner class Bridge {
         @JavascriptInterface
-        fun installApk(url: String): Unit = runOnUiThread { downloadAndInstall(url) }
+        fun installApk(url: String, version: String): Unit = runOnUiThread { downloadAndInstall(url, version) }
         @JavascriptInterface
-        fun version(): String = packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.0"
+        fun cancelUpdate(): Unit = runOnUiThread { pendingUrl = null }
+        @JavascriptInterface
+        fun version(): String = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         @JavascriptInterface
         fun openBrowser(url: String): Unit = runOnUiThread {
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
         }
         @JavascriptInterface
-        fun showSite(url: String, x: Double, y: Double, w: Double, h: Double): Unit = runOnUiThread { showSiteView(url, x, y, w, h) }
+        fun showSite(url: String, x: Double, y: Double, w: Double, h: Double) { runOnUiThread { showSiteView(url, x, y, w, h) } }
         @JavascriptInterface
         fun hideSite(): Unit = runOnUiThread { site?.visibility = android.view.View.GONE }
         @JavascriptInterface
         fun reloadSite(): Unit = runOnUiThread { site?.reload() }
         @JavascriptInterface
-        fun openSite(url: String): Unit = runOnUiThread { siteLauncher.launch(SiteActivity.intent(this@MainActivity, url)) }
+        fun openSite(url: String) { runOnUiThread { siteLauncher.launch(SiteActivity.intent(this@MainActivity, url)) } }
         @JavascriptInterface
         fun hasPhotos(): Boolean = granted(photoPerm)
         @JavascriptInterface
@@ -169,27 +171,103 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadAndInstall(url: String) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+    // ===== Обновление из GitHub =====
+    // 1) разрешение «Установка неизвестных приложений» (если нет — открываем настройки и продолжаем в onResume)
+    // 2) скачивание через DownloadManager с прогрессом в приложение
+    // 3) проверка APK: тот же пакет, versionCode новее, та же подпись — иначе понятная ошибка
+    // 4) системный установщик Android
+    private var pendingUrl: String? = null
+    private var pendingVersion: String = ""
+    private var dlId = -1L
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun upd(state: String, pct: Int = 0, extra: String = "") {
+        val e = extra.replace("\\", "").replace("'", "’").replace("\n", " ")
+        web.post { web.evaluateJavascript("window.onSmolUpdate && window.onSmolUpdate('$state', $pct, '$e')", null) }
+    }
+
+    private fun canInstall() = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
+
+    private fun downloadAndInstall(url: String, version: String = "") {
+        if (dlId != -1L) return
+        pendingUrl = url; pendingVersion = version
+        if (!canInstall()) {
+            upd("perm")
+            try { startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
+            catch (e: Exception) { upd("error", 0, "Откройте Настройки → Приложения → СмолКлимат → Установка неизвестных приложений и включите разрешение") }
             return
         }
-        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)!!
+        startDownload(url)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val u = pendingUrl
+        if (u != null && dlId == -1L) {
+            if (canInstall()) startDownload(u) else upd("error", 0, "Без разрешения на установку обновление не поставить. Нажмите «Обновить» ещё раз")
+        }
+    }
+
+    private fun startDownload(url: String) {
+        pendingUrl = null
+        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return upd("error", 0, "Нет доступа к памяти телефона")
         val file = File(dir, "smolklimat-update.apk").apply { if (exists()) delete() }
         val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val id = dm.enqueue(DownloadManager.Request(Uri.parse(url))
-            .setTitle("Обновление СмолКлимат")
-            .setDestinationUri(Uri.fromFile(file))
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED))
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context, i: Intent) {
-                if (i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) != id) return
-                unregisterReceiver(this)
-                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
-                startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        dlId = try {
+            dm.enqueue(DownloadManager.Request(Uri.parse(url))
+                .setTitle("Обновление СмолКлимат " + pendingVersion)
+                .setMimeType("application/vnd.android.package-archive")
+                .setDestinationUri(Uri.fromFile(file))
+                .setAllowedOverMetered(true).setAllowedOverRoaming(true)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE))
+        } catch (e: Exception) { upd("error", 0, "Не удалось начать загрузку: " + (e.message ?: "")); -1L }
+        if (dlId == -1L) return
+        upd("downloading", 0)
+        val id = dlId
+        val poll = object : Runnable {
+            override fun run() {
+                val c = dm.query(DownloadManager.Query().setFilterById(id))
+                if (c == null || !c.moveToFirst()) { c?.close(); dlId = -1L; return upd("error", 0, "Загрузка отменена") }
+                val st = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val done = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                c.close()
+                when (st) {
+                    DownloadManager.STATUS_SUCCESSFUL -> { dlId = -1L; verifyAndInstall(file) }
+                    DownloadManager.STATUS_FAILED -> { dlId = -1L; upd("error", 0, "Загрузка не удалась (код $reason). Проверьте интернет") }
+                    else -> {
+                        val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                        upd("downloading", pct, if (total > 0) String.format("%.1f МБ", total / 1048576.0) else "")
+                        ui.postDelayed(this, 500)
+                    }
+                }
             }
         }
-        ContextCompat.registerReceiver(this, receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
+        ui.postDelayed(poll, 400)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun verifyAndInstall(file: File) {
+        if (!file.exists() || file.length() < 1_000_000) return upd("error", 0, "Скачанный файл повреждён. Попробуйте ещё раз")
+        val pm = packageManager
+        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val apk = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: return upd("error", 0, "Файл из релиза — не APK приложения")
+        if (apk.packageName != packageName) return upd("error", 0, "В релизе APK другого приложения (" + apk.packageName + ")")
+        val me = pm.getPackageInfo(packageName, flags)
+        val newCode = if (Build.VERSION.SDK_INT >= 28) apk.longVersionCode else apk.versionCode.toLong()
+        val curCode = if (Build.VERSION.SDK_INT >= 28) me.longVersionCode else me.versionCode.toLong()
+        if (newCode <= curCode) return upd("error", 0, "В релизе версия не новее установленной (versionCode $newCode ≤ $curCode). Пересоберите APK с бо́льшим versionCode")
+        fun sigs(p: android.content.pm.PackageInfo): Set<String> =
+            (if (Build.VERSION.SDK_INT >= 28) p.signingInfo?.apkContentsSigners?.toList() else p.signatures?.toList()).orEmpty().map { it.toCharsString() }.toSet()
+        val a = sigs(apk); val b = sigs(me)
+        if (a.isNotEmpty() && b.isNotEmpty() && a.intersect(b).isEmpty())
+            return upd("error", 0, "Новая версия подписана другим ключом — Android не установит её поверх. Удалите приложение и установите заново (или соберите APK тем же ключом)")
+        upd("ready", 100)
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) { upd("error", 0, "Не удалось открыть установщик Android") }
     }
 }
