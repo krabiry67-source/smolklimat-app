@@ -26,6 +26,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
 
+const val HIDE_SITE_HEADER = "(function(){var id='smol-nohead';function add(){if(document.getElementById(id))return;var s=document.createElement('style');s.id=id;s.textContent=\".t228,.t450,.t451,.t456,.t280,.t821,.t1272,.t-menuburger,.t-menuwidgeticons,.t-menusub,[data-record-type=\\\"257\\\"],[data-record-type=\\\"450\\\"],[data-record-type=\\\"451\\\"],[data-record-type=\\\"456\\\"],[data-record-type=\\\"280\\\"],[data-record-type=\\\"821\\\"],[data-record-type=\\\"1272\\\"],[data-record-type=\\\"360\\\"]{display:none!important}body{padding-top:0!important}\";(document.head||document.documentElement).appendChild(s);}add();document.addEventListener('DOMContentLoaded',add);new MutationObserver(add).observe(document.documentElement,{childList:true,subtree:true});})();"
+
 class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var root: android.widget.FrameLayout
@@ -171,6 +173,10 @@ class MainActivity : AppCompatActivity() {
                     try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (e: Exception) {}
                     return true
                 }
+                // Скрываем шапку сайта (меню Tilda) — внутри приложения она не нужна
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) { view.evaluateJavascript(HIDE_SITE_HEADER, null) }
+                override fun onPageCommitVisible(view: WebView, url: String?) { view.evaluateJavascript(HIDE_SITE_HEADER, null) }
+                override fun onPageFinished(view: WebView, url: String?) { view.evaluateJavascript(HIDE_SITE_HEADER, null) }
             }
             root.addView(v)
             site = v

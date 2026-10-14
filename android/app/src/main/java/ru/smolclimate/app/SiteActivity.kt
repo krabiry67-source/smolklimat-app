@@ -74,6 +74,8 @@ class SiteActivity : AppCompatActivity() {
                 try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (e: Exception) {}
                 return true
             }
+            override fun onPageCommitVisible(view: WebView, url: String?) { view.evaluateJavascript(HIDE_SITE_HEADER, null) }
+            override fun onPageFinished(view: WebView, url: String?) { view.evaluateJavascript(HIDE_SITE_HEADER, null) }
         }
 
         root.addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, (56 * dp).toInt()))
