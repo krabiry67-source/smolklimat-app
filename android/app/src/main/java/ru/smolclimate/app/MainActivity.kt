@@ -317,18 +317,27 @@ class MainActivity : AppCompatActivity() {
     private fun verifyAndInstall(file: File) {
         if (!file.exists() || file.length() < 1_000_000) return upd("error", 0, "Скачанный файл повреждён. Попробуйте ещё раз")
         val pm = packageManager
-        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
-        val apk = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: return upd("error", 0, "Файл из релиза — не APK приложения")
+        val sigFlag = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val apk = try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                pm.getPackageArchiveInfo(file.absolutePath, PackageManager.PackageInfoFlags.of(sigFlag.toLong()))
+            } else {
+                pm.getPackageArchiveInfo(file.absolutePath, sigFlag)
+            }
+        } catch (e: Exception) { null } ?: return upd("error", 0, "Файл из релиза — не APK приложения. Возможно, загрузка прервалась — попробуйте ещё раз")
+        // Android bug: без этого signingInfo не читается у APK из внешнего хранилища
+        apk.applicationInfo?.also { it.sourceDir = file.absolutePath; it.publicSourceDir = file.absolutePath }
         if (apk.packageName != packageName) return upd("error", 0, "В релизе APK другого приложения (" + apk.packageName + ")")
-        val me = pm.getPackageInfo(packageName, flags)
+        val me = pm.getPackageInfo(packageName, sigFlag)
         val newCode = if (Build.VERSION.SDK_INT >= 28) apk.longVersionCode else apk.versionCode.toLong()
         val curCode = if (Build.VERSION.SDK_INT >= 28) me.longVersionCode else me.versionCode.toLong()
-        if (newCode <= curCode) return upd("error", 0, "В релизе версия не новее установленной (versionCode $newCode ≤ $curCode). Пересоберите APK с бо́льшим versionCode")
+        if (newCode < curCode) return upd("error", 0, "В релизе версия старее установленной (versionCode $newCode < $curCode)")
+        if (newCode == curCode) return upd("uptodate", 100)
         fun sigs(p: android.content.pm.PackageInfo): Set<String> =
             (if (Build.VERSION.SDK_INT >= 28) p.signingInfo?.apkContentsSigners?.toList() else p.signatures?.toList()).orEmpty().map { it.toCharsString() }.toSet()
         val a = sigs(apk); val b = sigs(me)
         if (a.isNotEmpty() && b.isNotEmpty() && a.intersect(b).isEmpty())
-            return upd("error", 0, "Новая версия подписана другим ключом — Android не установит её поверх. Удалите приложение и установите заново (или соберите APK тем же ключом)")
+            return upd("error", 0, "Новая версия подписана другим ключом — Android не установит её поверх. Удалите приложение и установите заново")
         upd("ready", 100)
         val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
         try {
