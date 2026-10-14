@@ -143,7 +143,26 @@ class MainActivity : AppCompatActivity() {
 
     inner class Bridge {
         @JavascriptInterface
+        fun installApk(url: String): Unit = runOnUiThread { downloadAndInstall(url) }
+        @JavascriptInterface
         fun installApk(url: String, version: String): Unit = runOnUiThread { downloadAndInstall(url, version) }
+        // Список релизов GitHub запрашивает Android — без CORS и ограничений WebView. Ответ: window.onSmolReleases(status, json)
+        @JavascriptInterface
+        fun fetchReleases(repo: String) {
+            Thread {
+                var code = 0; var body = "[]"
+                try {
+                    val c = java.net.URL("https://api.github.com/repos/" + repo.trim().removeSuffix(".git") + "/releases?per_page=15").openConnection() as java.net.HttpURLConnection
+                    c.setRequestProperty("Accept", "application/vnd.github+json")
+                    c.setRequestProperty("User-Agent", "SmolKlimatApp")
+                    c.connectTimeout = 15000; c.readTimeout = 15000
+                    code = c.responseCode
+                    body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: "[]"
+                } catch (e: Exception) { code = 0 }
+                val js = org.json.JSONObject.quote(body)
+                web.post { web.evaluateJavascript("window.onSmolReleases && window.onSmolReleases($code, $js)", null) }
+            }.start()
+        }
         @JavascriptInterface
         fun cancelUpdate(): Unit = runOnUiThread { pendingUrl = null }
         @JavascriptInterface
