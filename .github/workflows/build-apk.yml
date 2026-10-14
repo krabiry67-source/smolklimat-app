@@ -20,8 +20,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: android } }
-    env:
-      HAS_KEY: ${{ secrets.KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -43,18 +41,24 @@ jobs:
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "Версия $NAME (code $CODE)"
       - name: Keystore
-        if: env.HAS_KEY == 'true'
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.jks
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            echo "KEYSTORE_FILE=${{ github.workspace }}/android/release.jks" >> "$GITHUB_ENV"
+            echo "Keystore: production key loaded"
+          else
+            echo "Keystore: secret not set, using debug key"
+          fi
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
       - name: Build
         env:
           VERSION_NAME: ${{ steps.ver.outputs.name }}
           VERSION_CODE: ${{ steps.ver.outputs.code }}
-          KEYSTORE_FILE: ${{ secrets.KEYSTORE_BASE64 != '' && format('{0}/android/release.jks', github.workspace) || '' }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          [ -z "$KEYSTORE_FILE" ] && unset KEYSTORE_FILE
           gradle assembleRelease
           mkdir -p out && cp app/build/outputs/apk/release/app-release.apk "out/smolklimat-${VERSION_NAME}.apk"
           ls -lh out
